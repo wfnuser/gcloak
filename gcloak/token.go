@@ -1,13 +1,6 @@
 package gcloak
 
 import (
-	"fmt"
-	"net/http"
-	"time"
-
-	oidc "github.com/coreos/go-oidc"
-	"github.com/gin-gonic/gin"
-	"golang.org/x/oauth2"
 	"gopkg.in/square/go-jose.v2/jwt"
 )
 
@@ -39,63 +32,9 @@ type KeyCloakToken struct {
 	RealmAccess       ServiceRole            `json:"realm_access,omitempty"`
 }
 
-func decodeToken(tokenString string) (map[string]interface{}, error) {
-	var claims map[string]interface{} // generic map to store parsed token
-	// decode JWT token without verifying the signature
+func decodeKeyCloakToken(tokenString string) (KeyCloakToken, error) {
+	var claims KeyCloakToken // generic map to store parsed token
 	token, _ := jwt.ParseSigned(tokenString)
 	err := token.UnsafeClaimsWithoutVerification(&claims)
 	return claims, err
-}
-
-func TokenHandler(ctx *gin.Context) {
-	fmt.Println("")
-	provider, err := oidc.NewProvider(ctx, conf.Endpoint)
-	if err != nil {
-		ctx.AbortWithStatus(http.StatusInternalServerError)
-	}
-	oidcConfig := &oidc.Config{
-		ClientID: conf.ClientID,
-	}
-	verifier := provider.Verifier(oidcConfig)
-	oauth2Config := oauth2.Config{
-		ClientID:     conf.ClientID,
-		ClientSecret: conf.ClientSecret,
-		// 天坑；这个必须得写对...
-		RedirectURL: "http://localhost:8181/v1/token",
-		// Discovery returns the OAuth2 endpoints.
-		Endpoint: provider.Endpoint(),
-		// "openid" is a required scope for OpenID Connect flows.
-		Scopes: []string{oidc.ScopeOpenID, "profile", "email", "roles"},
-	}
-	oauth2Token, err := oauth2Config.Exchange(ctx, ctx.Request.URL.Query().Get("code"))
-	if err != nil {
-		fmt.Println("Failed to exchange token: " + err.Error())
-		ctx.AbortWithStatus(http.StatusForbidden)
-		return
-	}
-	rawIDToken, ok := oauth2Token.Extra("id_token").(string)
-	if !ok {
-		ctx.AbortWithStatus(http.StatusForbidden)
-		return
-	}
-	rawAccessToken, ok := oauth2Token.Extra("access_token").(string)
-	if !ok {
-		ctx.AbortWithStatus(http.StatusForbidden)
-		return
-	}
-	idToken, err := verifier.Verify(ctx, rawIDToken)
-	if err != nil {
-		ctx.AbortWithStatus(http.StatusForbidden)
-		return
-	}
-	addCookie(ctx.Writer, conf.IDTokenCookieName, rawIDToken, time.Duration(conf.TTL)*time.Minute)
-	addCookie(ctx.Writer, conf.AccessTokenCookieName, rawAccessToken, time.Duration(conf.TTL)*time.Minute)
-
-	var IDTokenClaims interface{}
-	if err := idToken.Claims(&IDTokenClaims); err != nil {
-		ctx.AbortWithStatus(http.StatusForbidden)
-		return
-	}
-
-	ctx.JSON(200, IDTokenClaims)
 }

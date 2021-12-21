@@ -1,6 +1,7 @@
 package gcloak
 
 import (
+	"context"
 	"net/http"
 
 	oidc "github.com/coreos/go-oidc"
@@ -8,29 +9,26 @@ import (
 )
 
 type GCloakConf struct {
+	URL                   string
+	Realm                 string
 	Endpoint              string
-	IDTokenCookieName     string
-	AccessTokenCookieName string
+	RedirectURL           string
 	ClientID              string
 	ClientSecret          string
+	IDTokenCookieName     string
+	AccessTokenCookieName string
 	TTL                   int64
 }
 
-var conf GCloakConf = GCloakConf{
-	Endpoint:              "http://localhost:8080/auth/realms/cloud",
-	IDTokenCookieName:     "KeyCloakCloudID",
-	AccessTokenCookieName: "KeyCloakCloudAccess",
-	ClientID:              "myclient",
-	ClientSecret:          "FZu9jL7sG7A1lYvjTO9D7RzXkbNBAGa4",
-	TTL:                   120,
-}
-
-var accessMap map[string][]string = map[string][]string{
-	"/v1/ping": {"dev"},
-}
-
-func KeyCloakAuth() gin.HandlerFunc {
+func KeyCloakAuth(conf GCloakConf, accessMap map[string][]string) gin.HandlerFunc {
+	ctx := context.Background()
+	provider, err := oidc.NewProvider(ctx, conf.Endpoint)
+	oidcConfig := &oidc.Config{
+		ClientID: conf.ClientID,
+	}
+	verifier := provider.Verifier(oidcConfig)
 	return func(ctx *gin.Context) {
+		// TODO: Authorize timeout mechanism
 		var rawIDToken string
 		var rawAccessToken string
 		for _, cookie := range ctx.Request.Cookies() {
@@ -41,41 +39,39 @@ func KeyCloakAuth() gin.HandlerFunc {
 				rawAccessToken = cookie.Value
 			}
 		}
+
+		// IDToken missing is not allowed
 		if rawIDToken == "" {
-			ctx.AbortWithStatus(http.StatusForbidden)
+			ctx.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
-		provider, err := oidc.NewProvider(ctx, conf.Endpoint)
-		oidcConfig := &oidc.Config{
-			ClientID: conf.ClientID,
-		}
-		verifier := provider.Verifier(oidcConfig)
 		_, err = verifier.Verify(ctx, rawIDToken)
 		if err != nil {
-			ctx.AbortWithStatus(http.StatusForbidden)
+			// TODO: fine-grained verification error should be exposed
+			ctx.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
 
-		m, e := decodeToken(rawAccessToken)
+		t, e := decodeKeyCloakToken(rawAccessToken)
 		if e != nil {
-			ctx.AbortWithStatus(http.StatusInternalServerError)
+			ctx.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
-		// fmt.Println(ctx.Request.URL.Path)
-		// fmt.Println(m["realm_access"].(map[string](interface{}))["roles"].([]interface{}))
-		if accessMap[ctx.Request.URL.Path] != nil {
-			valid := false
-			for _, role := range m["realm_access"].(map[string](interface{}))["roles"].([]interface{}) {
-				for _, grant := range accessMap[ctx.Request.URL.Path] {
-					if grant == role.(string) {
-						valid = true
+
+		if accessMap != nil && accessMap[ctx.Request.URL.Path] != nil {
+			authorized := false
+			for _, role := range t.RealmAccess.Roles {
+				for _, granted := range accessMap[ctx.Request.URL.Path] {
+					if granted == role {
+						authorized = true
+						break
 					}
 				}
-				if valid {
+				if authorized {
 					break
 				}
 			}
-			if !valid {
+			if !authorized {
 				ctx.AbortWithStatus(http.StatusForbidden)
 			}
 		}
