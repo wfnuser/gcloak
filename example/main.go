@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"gcloak/gcloak"
 	"net/http"
+
+	"github.com/wfnuser/gcloak"
 
 	oidc "github.com/coreos/go-oidc"
 	"github.com/gin-gonic/gin"

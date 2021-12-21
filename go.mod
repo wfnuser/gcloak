@@ -1,4 +1,4 @@
-module basic
+module github.com/wfnuser/gcloak
 
 go 1.16
 
